@@ -7,9 +7,10 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  Image,
 } from "react-native";
 import { router } from "expo-router";
-import { LogOut, MessageCircle, Hash, ArrowDown } from "lucide-react-native";
+import { LogOut, Hash, ArrowDown, Sun, Moon } from "lucide-react-native";
 import { Audio } from "expo-av";
 import { supabase } from "../../lib/supabase";
 import { getChatTheme } from "../../lib/chatTheme";
@@ -18,8 +19,12 @@ import type { Message, TypingUser, OnlineUser, CurrentUser } from "../../types/c
 import Avatar from "../../components/chat/Avatar";
 import MessageItem from "../../components/chat/MessageItem";
 import TypingIndicator from "../../components/chat/TypingIndicator";
-import InputArea from "../../components/chat/InputArea";
+import InputArea, { SelectedFile } from "../../components/chat/InputArea";
+import MediaModal from "../../components/chat/MediaModal";
+import * as Haptics from "expo-haptics";
 import { SafeAreaView } from "react-native-safe-area-context";
+
+const BEE_LOGO = require("../../assets/bee.png");
 
 export default function ChatScreen() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -33,6 +38,12 @@ export default function ChatScreen() {
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [unreadCount, setUnreadCount] = useState(0);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+
+  const [selectedImage, setSelectedImage] = useState<SelectedFile | null>(null);
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<SelectedFile | null>(null);
+  const [isUploadingFile, setIsUploadingFile] = useState(false);
+  const [selectedMediaModal, setSelectedMediaModal] = useState<string | null>(null);
 
   const [isRecording, setIsRecording] = useState(false);
   const [recordingDuration, setRecordingDuration] = useState(0);
@@ -56,7 +67,7 @@ export default function ChatScreen() {
       const { data: msgs } = await supabase
         .from("messages")
         .select(
-          "id,content,type,audio_url,audio_duration,user_id,created_at,profiles(username,avatar_url)"
+          "id,content,type,audio_url,audio_duration,media_url,media_type,file_name,file_size,file_type,file_url,user_id,created_at,profiles(username,avatar_url)"
         )
         .order("created_at", { ascending: true });
       if (msgs) {
@@ -64,9 +75,15 @@ export default function ChatScreen() {
           msgs.map((m: any) => ({
             id: m.id,
             content: m.content,
-            type: m.type || "text",
+            type: m.type || (m.media_url ? "image" : m.file_url ? "file" : "text"),
             audio_url: m.audio_url || undefined,
             audio_duration: m.audio_duration || undefined,
+            media_url: m.media_url || undefined,
+            media_type: m.media_type || undefined,
+            file_name: m.file_name || undefined,
+            file_size: m.file_size || undefined,
+            file_type: m.file_type || undefined,
+            file_url: m.file_url || undefined,
             user_id: m.user_id,
             created_at: m.created_at,
             username: m.profiles?.username || "unknown",
@@ -137,7 +154,13 @@ export default function ChatScreen() {
               .single();
             const newMsg: Message = {
               ...(payload.new as any),
-              type: payload.new.type || "text",
+              type: payload.new.type || (payload.new.media_url ? "image" : payload.new.file_url ? "file" : "text"),
+              media_url: payload.new.media_url || undefined,
+              media_type: payload.new.media_type || undefined,
+              file_name: payload.new.file_name || undefined,
+              file_size: payload.new.file_size || undefined,
+              file_type: payload.new.file_type || undefined,
+              file_url: payload.new.file_url || undefined,
               username: p?.username || "unknown",
               avatar_url: p?.avatar_url || "",
             };
@@ -312,14 +335,96 @@ export default function ChatScreen() {
   }
 
   async function handleSend() {
-    if (!input.trim() || !currentUser) return;
+    if ((!input.trim() && !selectedImage && !selectedFile) || !currentUser) return;
     const content = input.trim();
     setInput("");
     setIsNearBottom(true);
     setUnreadCount(0);
-    await supabase
-      .from("messages")
-      .insert({ content, type: "text", user_id: currentUser.id });
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch {}
+
+    if (selectedFile) {
+      setIsUploadingFile(true);
+      try {
+        const cleanName = selectedFile.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+        const filePath = `${currentUser.id}/${Date.now()}_${cleanName}`;
+        
+        const response = await fetch(selectedFile.uri);
+        const blob = await response.blob();
+        const arrayBuffer = await new Response(blob).arrayBuffer();
+
+        const { error: uploadError } = await supabase.storage
+          .from("shared-files")
+          .upload(filePath, arrayBuffer, {
+            contentType: selectedFile.mimeType || "application/octet-stream",
+            upsert: false,
+          });
+        if (uploadError) throw uploadError;
+
+        const { data: urlData } = supabase.storage
+          .from("shared-files")
+          .getPublicUrl(filePath);
+
+        await supabase.from("messages").insert({
+          content: content || selectedFile.name,
+          type: "file",
+          file_name: selectedFile.name,
+          file_size: selectedFile.size,
+          file_type: selectedFile.mimeType || "application/octet-stream",
+          file_url: urlData.publicUrl,
+          user_id: currentUser.id,
+        });
+
+        setSelectedFile(null);
+      } catch (err) {
+        console.error(err);
+        alert("Gagal mengunggah berkas.");
+      } finally {
+        setIsUploadingFile(false);
+      }
+    } else if (selectedImage) {
+      setIsUploadingImage(true);
+      try {
+        const cleanName = selectedImage.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+        const filePath = `${currentUser.id}/${Date.now()}_${cleanName}`;
+
+        const response = await fetch(selectedImage.uri);
+        const blob = await response.blob();
+        const arrayBuffer = await new Response(blob).arrayBuffer();
+
+        const { error: uploadError } = await supabase.storage
+          .from("chat-media")
+          .upload(filePath, arrayBuffer, {
+            contentType: selectedImage.mimeType || "image/jpeg",
+            upsert: false,
+          });
+        if (uploadError) throw uploadError;
+
+        const { data: urlData } = supabase.storage
+          .from("chat-media")
+          .getPublicUrl(filePath);
+
+        await supabase.from("messages").insert({
+          content: content || "📷 Gambar",
+          type: "image",
+          media_url: urlData.publicUrl,
+          media_type: "image",
+          user_id: currentUser.id,
+        });
+
+        setSelectedImage(null);
+      } catch (err) {
+        console.error(err);
+        alert("Gagal mengunggah gambar.");
+      } finally {
+        setIsUploadingImage(false);
+      }
+    } else {
+      await supabase
+        .from("messages")
+        .insert({ content, type: "text", user_id: currentUser.id });
+    }
   }
 
   async function handleDelete(id: string) {
@@ -394,14 +499,15 @@ export default function ChatScreen() {
   }
 
   return (
+    <>
     <SafeAreaView
       style={{ flex: 1, backgroundColor: t.pageBg }}
       edges={["top"]}
     >
       <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        behavior="padding"
         style={{ flex: 1 }}
-        keyboardVerticalOffset={0}
+        keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}
       >
         {/* Header */}
         <View
@@ -419,15 +525,20 @@ export default function ChatScreen() {
           <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
             <View
               style={{
-                width: 34,
-                height: 34,
-                borderRadius: 10,
-                backgroundColor: t.logoGradient,
+                width: 36,
+                height: 36,
+                borderRadius: 11,
+                backgroundColor: isDark ? "#444444" : "#1a1a1a",
                 alignItems: "center",
                 justifyContent: "center",
+                overflow: "hidden",
               }}
             >
-              <MessageCircle size={16} color="#fff" />
+              <Image
+                source={BEE_LOGO}
+                style={{ width: "80%", height: "80%" }}
+                resizeMode="contain"
+              />
             </View>
             <Text
               style={{
@@ -442,6 +553,44 @@ export default function ChatScreen() {
           </View>
 
           <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+            {/* Dark mode toggle */}
+            <TouchableOpacity
+              onPress={() => setIsDark(!isDark)}
+              style={{
+                width: 34,
+                height: 34,
+                borderRadius: 10,
+                backgroundColor: t.toggleBg,
+                borderWidth: 1,
+                borderColor: t.toggleBorder,
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              {isDark ? (
+                <Sun size={15} color="#fbbf24" />
+              ) : (
+                <Moon size={15} color="#7c3aed" />
+              )}
+            </TouchableOpacity>
+
+            {/* Profile link */}
+            <TouchableOpacity
+              onPress={() => router.push("/(tabs)/profile")}
+              style={{
+                borderRadius: 10,
+                padding: 4,
+              }}
+            >
+              <Avatar
+                username={currentUser.username}
+                avatar_url={currentUser.avatar_url}
+                size={26}
+                isDark={isDark}
+              />
+            </TouchableOpacity>
+
+            {/* Logout */}
             <TouchableOpacity
               onPress={handleLogout}
               disabled={isLoggingOut}
@@ -513,6 +662,7 @@ export default function ChatScreen() {
             data={messages}
             keyExtractor={(item) => item.id}
             contentContainerStyle={{ padding: 16, gap: 10 }}
+            keyboardShouldPersistTaps="handled"
             onScrollEndDrag={(e) => {
               const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
               const near =
@@ -549,6 +699,7 @@ export default function ChatScreen() {
                   setEditText("");
                 }}
                 onDelete={handleDelete}
+                onOpenMedia={(url) => setSelectedMediaModal(url)}
               />
             )}
           />
@@ -617,6 +768,10 @@ export default function ChatScreen() {
           isRecording={isRecording}
           recordingDuration={recordingDuration}
           isSendingAudio={isSendingAudio}
+          selectedImage={selectedImage}
+          isUploadingImage={isUploadingImage}
+          selectedFile={selectedFile}
+          isUploadingFile={isUploadingFile}
           isDark={isDark}
           t={t}
           onInputChange={handleInputChange}
@@ -624,8 +779,19 @@ export default function ChatScreen() {
           onStartRecording={startRecording}
           onStopAndSendRecording={stopAndSendRecording}
           onCancelRecording={cancelRecording}
+          onSelectImage={(file) => setSelectedImage(file)}
+          onRemoveImage={() => setSelectedImage(null)}
+          onSelectFile={(file) => setSelectedFile(file)}
+          onRemoveFile={() => setSelectedFile(null)}
         />
       </KeyboardAvoidingView>
     </SafeAreaView>
+
+    <MediaModal
+      isOpen={!!selectedMediaModal}
+      imageUrl={selectedMediaModal}
+      onClose={() => setSelectedMediaModal(null)}
+    />
+    </>
   );
 }

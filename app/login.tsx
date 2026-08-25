@@ -8,12 +8,15 @@ import {
   Platform,
   ScrollView,
   ActivityIndicator,
+  Image,
 } from "react-native";
 import { router } from "expo-router";
-import { MessageCircle, Eye, EyeOff, Sun, Moon } from "lucide-react-native";
+import { Eye, EyeOff, Sun, Moon } from "lucide-react-native";
 import { supabase } from "../lib/supabase";
 import { getChatTheme } from "../lib/chatTheme";
 import { SafeAreaView } from "react-native-safe-area-context";
+
+const BEE_LOGO = require("../assets/bee.png");
 
 export default function LoginScreen() {
   const [email, setEmail] = useState("");
@@ -54,7 +57,7 @@ export default function LoginScreen() {
       edges={["top"]}
     >
       <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        behavior="padding"
         style={{ flex: 1 }}
       >
         <ScrollView
@@ -97,13 +100,18 @@ export default function LoginScreen() {
                 width: 64,
                 height: 64,
                 borderRadius: 20,
-                backgroundColor: t.logoGradient,
+                backgroundColor: isDark ? "#444444" : "#1a1a1a",
                 alignItems: "center",
                 justifyContent: "center",
                 marginBottom: 16,
+                overflow: "hidden",
               }}
             >
-              <MessageCircle size={28} color="#fff" />
+              <Image
+                source={BEE_LOGO}
+                style={{ width: "80%", height: "80%" }}
+                resizeMode="contain"
+              />
             </View>
             <Text
               style={{

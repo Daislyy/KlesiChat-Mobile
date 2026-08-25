@@ -5,6 +5,8 @@ import {
   ScrollView,
   ActivityIndicator,
   Image,
+  KeyboardAvoidingView,
+  Platform,
 } from "react-native";
 import { router } from "expo-router";
 import { User, Mail, Shield, Calendar } from "lucide-react-native";
@@ -101,10 +103,14 @@ export default function ProfileScreen() {
       style={{ flex: 1, backgroundColor: t.pageBg }}
       edges={["top"]}
     >
-      <ScrollView
-        contentContainerStyle={{ padding: 20 }}
-        keyboardShouldPersistTaps="handled"
+      <KeyboardAvoidingView
+        behavior="padding"
+        style={{ flex: 1 }}
       >
+        <ScrollView
+          contentContainerStyle={{ padding: 20 }}
+          keyboardShouldPersistTaps="handled"
+        >
         {/* Header */}
         <Text
           style={{
@@ -362,6 +368,7 @@ export default function ProfileScreen() {
           />
         </View>
       </ScrollView>
-    </SafeAreaView>
-  );
+    </KeyboardAvoidingView>
+  </SafeAreaView>
+);
 }

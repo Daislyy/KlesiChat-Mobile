@@ -1,9 +1,15 @@
 export interface Message {
   id: string;
   content: string;
-  type?: "text" | "audio";
+  type?: "text" | "audio" | "image" | "file" | string;
   audio_url?: string;
   audio_duration?: number;
+  media_url?: string;
+  media_type?: string;
+  file_name?: string;
+  file_size?: number;
+  file_type?: string;
+  file_url?: string;
   user_id: string;
   username: string;
   avatar_url?: string;
@@ -35,6 +41,12 @@ export interface DirectMessage {
   type: string;
   audio_url?: string;
   audio_duration?: number;
+  media_url?: string;
+  media_type?: string;
+  file_name?: string;
+  file_size?: number;
+  file_type?: string;
+  file_url?: string;
   is_read: boolean;
   created_at: string;
   sender_username: string;

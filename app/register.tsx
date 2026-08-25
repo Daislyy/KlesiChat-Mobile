@@ -8,10 +8,10 @@ import {
   Platform,
   ScrollView,
   ActivityIndicator,
+  Image,
 } from "react-native";
 import { router } from "expo-router";
 import {
-  MessageCircle,
   Eye,
   EyeOff,
   Sun,
@@ -24,6 +24,8 @@ import {
 import { supabase } from "../lib/supabase";
 import { getChatTheme } from "../lib/chatTheme";
 import { SafeAreaView } from "react-native-safe-area-context";
+
+const BEE_LOGO = require("../assets/bee.png");
 
 export default function RegisterScreen() {
   const [username, setUsername] = useState("");
@@ -81,7 +83,7 @@ export default function RegisterScreen() {
       edges={["top"]}
     >
       <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        behavior="padding"
         style={{ flex: 1 }}
       >
         <ScrollView
@@ -125,13 +127,18 @@ export default function RegisterScreen() {
                 width: 56,
                 height: 56,
                 borderRadius: 16,
-                backgroundColor: t.logoGradient,
+                backgroundColor: isDark ? "#444444" : "#1a1a1a",
                 alignItems: "center",
                 justifyContent: "center",
                 marginBottom: 12,
+                overflow: "hidden",
               }}
             >
-              <MessageCircle size={24} color="#fff" />
+              <Image
+                source={BEE_LOGO}
+                style={{ width: "80%", height: "80%" }}
+                resizeMode="contain"
+              />
             </View>
             <Text
               style={{

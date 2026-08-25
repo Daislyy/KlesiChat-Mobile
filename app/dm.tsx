@@ -8,16 +8,24 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  Image,
+  Animated,
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
-import { ArrowLeft, Send, Mic, X, StopCircle } from "lucide-react-native";
+import { ArrowLeft, Send, Mic, X, StopCircle, Image as ImageIcon, Paperclip } from "lucide-react-native";
 import { Audio } from "expo-av";
+import * as ImagePicker from "expo-image-picker";
+import * as DocumentPicker from "expo-document-picker";
 import { supabase } from "../lib/supabase";
 import { getChatTheme, formatDuration } from "../lib/chatTheme";
 import { playNotificationSound } from "../lib/audioNotification";
 import type { CurrentUser, DirectMessage } from "../types/chat";
 import Avatar from "../components/chat/Avatar";
 import VoiceMessagePlayer from "../components/chat/VoiceMessagePlayer";
+import FileAttachment from "../components/chat/FileAttachment";
+import MediaModal from "../components/chat/MediaModal";
+import type { SelectedFile } from "../components/chat/InputArea";
+import * as Haptics from "expo-haptics";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 export default function DMScreen() {
@@ -37,6 +45,12 @@ export default function DMScreen() {
   const [isSendingAudio, setIsSendingAudio] = useState(false);
   const recordingRef = useRef<Audio.Recording | null>(null);
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const [selectedImage, setSelectedImage] = useState<SelectedFile | null>(null);
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<SelectedFile | null>(null);
+  const [isUploadingFile, setIsUploadingFile] = useState(false);
+  const [selectedMediaModal, setSelectedMediaModal] = useState<string | null>(null);
 
   const flatListRef = useRef<FlatList>(null);
   const t = getChatTheme(isDark);
@@ -256,16 +270,147 @@ export default function DMScreen() {
   }
 
   async function handleSend() {
-    if (!input.trim() || !currentUser || !otherUser) return;
+    if ((!input.trim() && !selectedImage && !selectedFile) || !currentUser || !otherUser) return;
     const content = input.trim();
     setInput("");
-    await supabase.from("direct_messages").insert({
-      content,
-      type: "text",
-      sender_id: currentUser.id,
-      receiver_id: otherUser.id,
-    });
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch {}
+
+    if (selectedFile) {
+      setIsUploadingFile(true);
+      try {
+        const cleanName = selectedFile.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+        const filePath = `${currentUser.id}/${Date.now()}_${cleanName}`;
+        const response = await fetch(selectedFile.uri);
+        const blob = await response.blob();
+        const arrayBuffer = await new Response(blob).arrayBuffer();
+
+        const { error: uploadError } = await supabase.storage
+          .from("shared-files")
+          .upload(filePath, arrayBuffer, {
+            contentType: selectedFile.mimeType || "application/octet-stream",
+            upsert: false,
+          });
+        if (uploadError) throw uploadError;
+
+        const { data: urlData } = supabase.storage
+          .from("shared-files")
+          .getPublicUrl(filePath);
+
+        await supabase.from("direct_messages").insert({
+          content: content || selectedFile.name,
+          type: "file",
+          file_name: selectedFile.name,
+          file_size: selectedFile.size,
+          file_type: selectedFile.mimeType || "application/octet-stream",
+          file_url: urlData.publicUrl,
+          sender_id: currentUser.id,
+          receiver_id: otherUser.id,
+        });
+
+        setSelectedFile(null);
+      } catch (err) {
+        console.error(err);
+        alert("Gagal mengunggah berkas.");
+      } finally {
+        setIsUploadingFile(false);
+      }
+    } else if (selectedImage) {
+      setIsUploadingImage(true);
+      try {
+        const cleanName = selectedImage.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+        const filePath = `${currentUser.id}/${Date.now()}_${cleanName}`;
+        const response = await fetch(selectedImage.uri);
+        const blob = await response.blob();
+        const arrayBuffer = await new Response(blob).arrayBuffer();
+
+        const { error: uploadError } = await supabase.storage
+          .from("chat-media")
+          .upload(filePath, arrayBuffer, {
+            contentType: selectedImage.mimeType || "image/jpeg",
+            upsert: false,
+          });
+        if (uploadError) throw uploadError;
+
+        const { data: urlData } = supabase.storage
+          .from("chat-media")
+          .getPublicUrl(filePath);
+
+        await supabase.from("direct_messages").insert({
+          content: content || "📷 Gambar",
+          type: "image",
+          media_url: urlData.publicUrl,
+          media_type: "image",
+          sender_id: currentUser.id,
+          receiver_id: otherUser.id,
+        });
+
+        setSelectedImage(null);
+      } catch (err) {
+        console.error(err);
+        alert("Gagal mengunggah gambar.");
+      } finally {
+        setIsUploadingImage(false);
+      }
+    } else {
+      await supabase.from("direct_messages").insert({
+        content,
+        type: "text",
+        sender_id: currentUser.id,
+        receiver_id: otherUser.id,
+      });
+    }
   }
+
+  const handlePickImage = async () => {
+    try {
+      const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permissionResult.granted) {
+        alert("Izin galeri diperlukan untuk memilih gambar.");
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.8,
+      });
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const asset = result.assets[0];
+        setSelectedImage({
+          uri: asset.uri,
+          name: asset.fileName || `image_${Date.now()}.jpg`,
+          size: asset.fileSize,
+          mimeType: asset.mimeType || "image/jpeg",
+        });
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handlePickFile = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: "*/*",
+        copyToCacheDirectory: true,
+      });
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const asset = result.assets[0];
+        if (asset.size && asset.size > 50 * 1024 * 1024) {
+          alert("Ukuran berkas maksimal 50 MB.");
+          return;
+        }
+        setSelectedFile({
+          uri: asset.uri,
+          name: asset.name,
+          size: asset.size,
+          mimeType: asset.mimeType || "application/octet-stream",
+        });
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
   if (!currentUser || !otherUser) {
     return (
@@ -284,13 +429,15 @@ export default function DMScreen() {
   }
 
   return (
+    <>
     <SafeAreaView
       style={{ flex: 1, backgroundColor: t.pageBg }}
-      edges={["top"]}
+      edges={["top", "bottom"]}
     >
       <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        behavior="padding"
         style={{ flex: 1 }}
+        keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}
       >
         {/* Header */}
         <View
@@ -346,6 +493,7 @@ export default function DMScreen() {
           ref={flatListRef}
           data={messages}
           keyExtractor={(item) => item.id}
+          keyboardShouldPersistTaps="handled"
           contentContainerStyle={{
             padding: 16,
             gap: 8,
@@ -368,247 +516,365 @@ export default function DMScreen() {
             </View>
           }
           style={{ backgroundColor: t.msgAreaBg }}
-          renderItem={({ item: msg }) => {
-            const isMe = msg.sender_id === currentUser.id;
-            return (
-              <View
-                style={{
-                  flexDirection: isMe ? "row-reverse" : "row",
-                  alignItems: "flex-end",
-                  gap: 8,
-                }}
-              >
-                {!isMe && (
-                  <Avatar
-                    username={msg.sender_username}
-                    avatar_url={msg.sender_avatar}
-                    size={28}
-                    isDark={isDark}
-                  />
-                )}
-                <View
-                  style={{
-                    maxWidth: "70%",
-                    padding: 10,
-                    paddingHorizontal: 14,
-                    borderTopLeftRadius: 18,
-                    borderTopRightRadius: 18,
-                    borderBottomLeftRadius: isMe ? 18 : 4,
-                    borderBottomRightRadius: isMe ? 4 : 18,
-                    backgroundColor: isMe
-                      ? "#7c3aed"
-                      : isDark
-                        ? "#1e1e2e"
-                        : "#f3f4f6",
-                  }}
-                >
-                  {msg.type === "audio" && msg.audio_url ? (
-                    <VoiceMessagePlayer
-                      url={msg.audio_url}
-                      duration={msg.audio_duration}
-                      isMe={isMe}
-                      isDark={isDark}
-                    />
-                  ) : (
-                    <Text
-                      style={{
-                        fontSize: 14,
-                        lineHeight: 21,
-                        color: isMe
-                          ? "#fff"
-                          : isDark
-                            ? "#e2e8f0"
-                            : "#111827",
-                      }}
-                    >
-                      {msg.content}
-                    </Text>
-                  )}
-                  <Text
-                    style={{
-                      fontSize: 10,
-                      opacity: 0.6,
-                      marginTop: 4,
-                      textAlign: isMe ? "right" : "left",
-                      color: isMe
-                        ? "#fff"
-                        : isDark
-                          ? "#e2e8f0"
-                          : "#111827",
-                    }}
-                  >
-                    {new Date(msg.created_at).toLocaleTimeString("id-ID", {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}
-                  </Text>
-                </View>
-                {isMe && (
-                  <Avatar
-                    username={currentUser.username}
-                    avatar_url={currentUser.avatar_url}
-                    size={28}
-                    isDark={isDark}
-                  />
-                )}
-              </View>
-            );
-          }}
+          renderItem={({ item: msg }) => (
+            <AnimatedDMItem
+              msg={msg}
+              isMe={msg.sender_id === currentUser.id}
+              currentUser={currentUser}
+              isDark={isDark}
+              onOpenMedia={(url) => setSelectedMediaModal(url)}
+            />
+          )}
         />
 
         {/* Input */}
         <View
           style={{
-            paddingHorizontal: 16,
-            paddingVertical: 12,
+            paddingHorizontal: 14,
+            paddingTop: 8,
+            paddingBottom: 10,
             backgroundColor: t.headerBg,
             borderTopWidth: 1,
             borderTopColor: t.headerBorder,
-            flexDirection: "row",
-            gap: 8,
-            alignItems: "flex-end",
           }}
         >
-          {isRecording ? (
+          {/* Image Preview Banner */}
+          {selectedImage && (
             <View
               style={{
-                flex: 1,
+                marginBottom: 8,
+                padding: 8,
+                paddingHorizontal: 12,
+                borderRadius: 14,
+                backgroundColor: isDark ? "rgba(40,40,48,0.9)" : "rgba(240,240,246,0.9)",
+                borderWidth: 1,
+                borderColor: isDark ? "#3f3f4e" : "#e2e2ec",
                 flexDirection: "row",
                 alignItems: "center",
-                gap: 10,
-                paddingHorizontal: 4,
+                justifyContent: "space-between",
               }}
             >
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 10, flex: 1 }}>
+                <Image source={{ uri: selectedImage.uri }} style={{ width: 42, height: 42, borderRadius: 8 }} />
+                <View style={{ flex: 1 }}>
+                  <Text numberOfLines={1} style={{ fontSize: 12, fontWeight: "600", color: t.inputColor }}>
+                    {selectedImage.name}
+                  </Text>
+                </View>
+              </View>
+              <TouchableOpacity onPress={() => setSelectedImage(null)} style={{ width: 26, height: 26, borderRadius: 6, backgroundColor: isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.06)", alignItems: "center", justifyContent: "center" }}>
+                <X size={14} color={isDark ? "#bbb" : "#555"} />
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* File Preview Banner */}
+          {selectedFile && (
+            <View
+              style={{
+                marginBottom: 8,
+                padding: 8,
+                paddingHorizontal: 12,
+                borderRadius: 14,
+                backgroundColor: isDark ? "rgba(40,40,48,0.9)" : "rgba(240,240,246,0.9)",
+                borderWidth: 1,
+                borderColor: isDark ? "#3f3f4e" : "#e2e2ec",
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 10, flex: 1 }}>
+                <View style={{ width: 38, height: 38, borderRadius: 8, backgroundColor: isDark ? "rgba(139,92,246,0.2)" : "rgba(124,58,237,0.1)", alignItems: "center", justifyContent: "center" }}>
+                  <Paperclip size={18} color={isDark ? "#a78bfa" : "#7c3aed"} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text numberOfLines={1} style={{ fontSize: 12, fontWeight: "600", color: t.inputColor }}>
+                    {selectedFile.name}
+                  </Text>
+                </View>
+              </View>
+              <TouchableOpacity onPress={() => setSelectedFile(null)} style={{ width: 26, height: 26, borderRadius: 6, backgroundColor: isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.06)", alignItems: "center", justifyContent: "center" }}>
+                <X size={14} color={isDark ? "#bbb" : "#555"} />
+              </TouchableOpacity>
+            </View>
+          )}
+
+          <View
+            style={{
+              flexDirection: "row",
+              gap: 8,
+              alignItems: "flex-end",
+            }}
+          >
+            {isRecording ? (
               <View
                 style={{
-                  width: 8,
-                  height: 8,
-                  borderRadius: 4,
-                  backgroundColor: "#ef4444",
-                }}
-              />
-              <Text
-                style={{
-                  fontSize: 13,
-                  color: isDark ? "#e2e8f0" : "#111827",
-                  fontVariant: ["tabular-nums"],
+                  flex: 1,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 10,
+                  paddingHorizontal: 4,
                 }}
               >
-                {formatDuration(recordingDuration)}
-              </Text>
-              <Text
-                style={{
-                  fontSize: 12,
-                  color: isDark ? "#9ca3af" : "#6b7280",
-                }}
-              >
-                Merekam...
-              </Text>
-              <View style={{ flex: 1 }} />
+                <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: "#ef4444" }} />
+                <Text style={{ fontSize: 13, color: isDark ? "#e2e8f0" : "#111827", fontVariant: ["tabular-nums"] }}>
+                  {formatDuration(recordingDuration)}
+                </Text>
+                <Text style={{ fontSize: 12, color: isDark ? "#9ca3af" : "#6b7280" }}>
+                  Merekam...
+                </Text>
+                <View style={{ flex: 1 }} />
+                <TouchableOpacity
+                  onPress={cancelRecording}
+                  style={{ width: 34, height: 34, borderRadius: 10, borderWidth: 1, borderColor: t.headerBorder, backgroundColor: isDark ? "#1e1e2e" : "#f3f4f6", alignItems: "center", justifyContent: "center" }}
+                >
+                  <X size={14} color={isDark ? "#9ca3af" : "#6b7280"} />
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 2 }}>
+                  <TouchableOpacity
+                    onPress={handlePickImage}
+                    disabled={isUploadingImage || isSendingAudio}
+                    style={{ width: 34, height: 34, borderRadius: 10, backgroundColor: selectedImage ? (isDark ? "rgba(139,92,246,0.25)" : "rgba(124,58,237,0.15)") : "transparent", alignItems: "center", justifyContent: "center" }}
+                  >
+                    <ImageIcon size={16} color={selectedImage ? (isDark ? "#a78bfa" : "#7c3aed") : (isDark ? "#8a8a9a" : "#6b7280")} />
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={handlePickFile}
+                    disabled={isUploadingFile || isSendingAudio}
+                    style={{ width: 34, height: 34, borderRadius: 10, backgroundColor: selectedFile ? (isDark ? "rgba(139,92,246,0.25)" : "rgba(124,58,237,0.15)") : "transparent", alignItems: "center", justifyContent: "center" }}
+                  >
+                    <Paperclip size={16} color={selectedFile ? (isDark ? "#a78bfa" : "#7c3aed") : (isDark ? "#8a8a9a" : "#6b7280")} />
+                  </TouchableOpacity>
+                </View>
+
+                <TextInput
+                  value={input}
+                  onChangeText={(text) => setInput(text)}
+                  placeholder={`Pesan ke ${otherUser.username}...`}
+                  placeholderTextColor={isDark ? "#555" : "#aaa"}
+                  multiline
+                  style={{ flex: 1, borderWidth: 1, borderColor: t.headerBorder, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10, fontSize: 14, backgroundColor: t.msgAreaBg, color: isDark ? "#e2e8f0" : "#111827", minHeight: 42, maxHeight: 120, lineHeight: 21 }}
+                />
+
+                <TouchableOpacity
+                  onPress={startRecording}
+                  disabled={isSendingAudio || Boolean(selectedImage || selectedFile)}
+                  style={{ width: 34, height: 34, borderRadius: 10, backgroundColor: isDark ? "#1e1e2e" : "#f3f4f6", borderWidth: 1, borderColor: t.headerBorder, alignItems: "center", justifyContent: "center", opacity: (isSendingAudio || Boolean(selectedImage || selectedFile)) ? 0.5 : 1 }}
+                >
+                  {isSendingAudio ? (
+                    <ActivityIndicator size="small" color={isDark ? "#8b5cf6" : "#7c3aed"} />
+                  ) : (
+                    <Mic size={16} color={isDark ? "#8b5cf6" : "#7c3aed"} />
+                  )}
+                </TouchableOpacity>
+              </>
+            )}
+
+            {Boolean(input.trim() || isRecording || isSendingAudio || selectedImage || selectedFile) && !isRecording && (
               <TouchableOpacity
-                onPress={cancelRecording}
+                onPress={handleSend}
+                disabled={(!input.trim() && !selectedImage && !selectedFile) || isSendingAudio}
                 style={{
-                  width: 34,
-                  height: 34,
-                  borderRadius: 10,
-                  borderWidth: 1,
-                  borderColor: t.headerBorder,
-                  backgroundColor: isDark ? "#1e1e2e" : "#f3f4f6",
+                  width: 42,
+                  height: 42,
+                  borderRadius: 12,
+                  backgroundColor: Boolean(input.trim() || selectedImage || selectedFile) ? "#7c3aed" : isDark ? "#2d2d3d" : "#e5e7eb",
                   alignItems: "center",
                   justifyContent: "center",
                 }}
               >
-                <X size={14} color={isDark ? "#9ca3af" : "#6b7280"} />
+                {isUploadingImage || isUploadingFile ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Send size={16} color={Boolean(input.trim() || selectedImage || selectedFile) ? "#fff" : isDark ? "#4b5563" : "#9ca3af"} />
+                )}
               </TouchableOpacity>
-            </View>
-          ) : (
-            <TextInput
-              value={input}
-              onChangeText={setInput}
-              placeholder={`Pesan ke ${otherUser.username}...`}
-              placeholderTextColor={isDark ? "#555" : "#aaa"}
-              multiline
-              style={{
-                flex: 1,
-                borderWidth: 1,
-                borderColor: t.headerBorder,
-                borderRadius: 12,
-                paddingHorizontal: 14,
-                paddingVertical: 10,
-                fontSize: 14,
-                backgroundColor: t.msgAreaBg,
-                color: isDark ? "#e2e8f0" : "#111827",
-                minHeight: 42,
-                maxHeight: 120,
-                lineHeight: 21,
-              }}
-            />
-          )}
-
-          {!input.trim() && !isSendingAudio && (
-            <TouchableOpacity
-              onPress={isRecording ? stopAndSendRecording : startRecording}
-              style={{
-                width: 42,
-                height: 42,
-                borderRadius: 12,
-                backgroundColor: isRecording
-                  ? "#ef4444"
-                  : isDark
-                    ? "#1e1e2e"
-                    : "#f3f4f6",
-                borderWidth: 1,
-                borderColor: isRecording ? "#ef4444" : t.headerBorder,
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              {isRecording ? (
-                <StopCircle size={16} color="#fff" />
-              ) : (
-                <Mic
-                  size={16}
-                  color={isDark ? "#8b5cf6" : "#7c3aed"}
-                />
-              )}
-            </TouchableOpacity>
-          )}
-
-          {(input.trim() || isSendingAudio) && (
-            <TouchableOpacity
-              onPress={handleSend}
-              disabled={!input.trim() || isSendingAudio}
-              style={{
-                width: 42,
-                height: 42,
-                borderRadius: 12,
-                backgroundColor: input.trim()
-                  ? "#7c3aed"
-                  : isDark
-                    ? "#2d2d3d"
-                    : "#e5e7eb",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              {isSendingAudio ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <Send
-                  size={16}
-                  color={
-                    input.trim()
-                      ? "#fff"
-                      : isDark
-                        ? "#4b5563"
-                        : "#9ca3af"
-                  }
-                />
-              )}
-            </TouchableOpacity>
-          )}
+            )}
+          </View>
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
+
+    <MediaModal
+      isOpen={!!selectedMediaModal}
+      imageUrl={selectedMediaModal}
+      onClose={() => setSelectedMediaModal(null)}
+    />
+    </>
+  );
+}
+
+interface AnimatedDMItemProps {
+  msg: DirectMessage;
+  isMe: boolean;
+  currentUser: CurrentUser;
+  isDark: boolean;
+  onOpenMedia: (url: string) => void;
+}
+
+function AnimatedDMItem({
+  msg,
+  isMe,
+  currentUser,
+  isDark,
+  onOpenMedia,
+}: AnimatedDMItemProps) {
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const slideAnim = useRef(new Animated.Value(isMe ? 18 : -18)).current;
+  const scaleAnim = useRef(new Animated.Value(0.92)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 200,
+        useNativeDriver: true,
+      }),
+      Animated.spring(slideAnim, {
+        toValue: 0,
+        tension: 90,
+        friction: 8,
+        useNativeDriver: true,
+      }),
+      Animated.spring(scaleAnim, {
+        toValue: 1,
+        tension: 90,
+        friction: 8,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, []);
+
+  return (
+    <Animated.View
+      style={{
+        flexDirection: isMe ? "row-reverse" : "row",
+        alignItems: "flex-end",
+        gap: 8,
+        opacity: fadeAnim,
+        transform: [
+          { translateX: slideAnim },
+          { scale: scaleAnim },
+        ],
+      }}
+    >
+      {!isMe && (
+        <Avatar
+          username={msg.sender_username}
+          avatar_url={msg.sender_avatar}
+          size={28}
+          isDark={isDark}
+        />
+      )}
+      <View
+        style={{
+          maxWidth: "75%",
+          padding: (msg.type === "audio" || msg.type === "image" || msg.type === "file") ? 6 : 10,
+          paddingHorizontal: (msg.type === "audio" || msg.type === "image" || msg.type === "file") ? 6 : 14,
+          borderTopLeftRadius: 18,
+          borderTopRightRadius: 18,
+          borderBottomLeftRadius: isMe ? 18 : 4,
+          borderBottomRightRadius: isMe ? 4 : 18,
+          backgroundColor: isMe
+            ? "#7c3aed"
+            : isDark
+              ? "#1e1e2e"
+              : "#f3f4f6",
+        }}
+      >
+        {msg.type === "audio" && msg.audio_url ? (
+          <VoiceMessagePlayer
+            url={msg.audio_url}
+            duration={msg.audio_duration}
+            isMe={isMe}
+            isDark={isDark}
+          />
+        ) : msg.type === "image" && msg.media_url ? (
+          <TouchableOpacity
+            activeOpacity={0.9}
+            onPress={() => onOpenMedia(msg.media_url || "")}
+          >
+            <Image
+              source={{ uri: msg.media_url }}
+              style={{ width: 220, height: 165, borderRadius: 12 }}
+              resizeMode="cover"
+            />
+            {Boolean(msg.content) && msg.content.trim() !== "📷 Gambar" && (
+              <Text
+                style={{
+                  paddingHorizontal: 6,
+                  paddingBottom: 4,
+                  paddingTop: 6,
+                  fontSize: 13,
+                  lineHeight: 21,
+                  color: isMe
+                    ? "#fff"
+                    : isDark
+                      ? "#e2e8f0"
+                      : "#111827",
+                }}
+              >
+                {msg.content}
+              </Text>
+            )}
+          </TouchableOpacity>
+        ) : msg.type === "file" && msg.file_url ? (
+          <FileAttachment
+            fileName={msg.file_name || "Berkas"}
+            fileSize={msg.file_size}
+            fileType={msg.file_type}
+            fileUrl={msg.file_url}
+            isMe={isMe}
+            isDark={isDark}
+          />
+        ) : (
+          <Text
+            style={{
+              fontSize: 14,
+              lineHeight: 21,
+              color: isMe
+                ? "#fff"
+                : isDark
+                  ? "#e2e8f0"
+                  : "#111827",
+            }}
+          >
+            {msg.content}
+          </Text>
+        )}
+        <Text
+          style={{
+            fontSize: 10,
+            opacity: 0.6,
+            marginTop: 4,
+            paddingHorizontal: 8,
+            paddingBottom: 2,
+            textAlign: isMe ? "right" : "left",
+            color: isMe
+              ? "#fff"
+              : isDark
+                ? "#e2e8f0"
+                : "#111827",
+          }}
+        >
+          {new Date(msg.created_at).toLocaleTimeString("id-ID", {
+            hour: "2-digit",
+            minute: "2-digit",
+          })}
+        </Text>
+      </View>
+      {isMe && (
+        <Avatar
+          username={currentUser.username}
+          avatar_url={currentUser.avatar_url}
+          size={28}
+          isDark={isDark}
+        />
+      )}
+    </Animated.View>
   );
 }

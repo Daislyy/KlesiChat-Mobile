@@ -1,14 +1,28 @@
 import React, { useRef, useState } from "react";
-import { View, Text, TextInput, TouchableOpacity } from "react-native";
-import { Send, X, Mic, StopCircle } from "lucide-react-native";
+import { View, Text, TextInput, TouchableOpacity, Image, ActivityIndicator } from "react-native";
+import { Send, X, Mic, Image as ImageIcon, Paperclip } from "lucide-react-native";
+import * as ImagePicker from "expo-image-picker";
+import * as DocumentPicker from "expo-document-picker";
 import type { ChatTheme } from "../../lib/chatTheme";
 import { formatDuration } from "../../lib/chatTheme";
+import { formatFileSize } from "./FileAttachment";
+
+export interface SelectedFile {
+  uri: string;
+  name: string;
+  size?: number;
+  mimeType?: string;
+}
 
 interface InputAreaProps {
   input: string;
   isRecording: boolean;
   recordingDuration: number;
   isSendingAudio: boolean;
+  selectedImage?: SelectedFile | null;
+  isUploadingImage?: boolean;
+  selectedFile?: SelectedFile | null;
+  isUploadingFile?: boolean;
   isDark: boolean;
   t: ChatTheme;
   onInputChange: (text: string) => void;
@@ -16,6 +30,10 @@ interface InputAreaProps {
   onStartRecording: () => void;
   onStopAndSendRecording: () => void;
   onCancelRecording: () => void;
+  onSelectImage?: (file: SelectedFile) => void;
+  onRemoveImage?: () => void;
+  onSelectFile?: (file: SelectedFile) => void;
+  onRemoveFile?: () => void;
 }
 
 export default function InputArea({
@@ -23,6 +41,10 @@ export default function InputArea({
   isRecording,
   recordingDuration,
   isSendingAudio,
+  selectedImage,
+  isUploadingImage = false,
+  selectedFile,
+  isUploadingFile = false,
   isDark,
   t,
   onInputChange,
@@ -30,17 +52,191 @@ export default function InputArea({
   onStartRecording,
   onStopAndSendRecording,
   onCancelRecording,
+  onSelectImage,
+  onRemoveImage,
+  onSelectFile,
+  onRemoveFile,
 }: InputAreaProps) {
+  const handlePickImage = async () => {
+    try {
+      const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permissionResult.granted) {
+        alert("Izin galeri diperlukan untuk memilih gambar.");
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.8,
+      });
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const asset = result.assets[0];
+        if (onSelectImage) {
+          onSelectImage({
+            uri: asset.uri,
+            name: asset.fileName || `image_${Date.now()}.jpg`,
+            size: asset.fileSize,
+            mimeType: asset.mimeType || "image/jpeg",
+          });
+        }
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handlePickFile = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: "*/*",
+        copyToCacheDirectory: true,
+      });
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const asset = result.assets[0];
+        if (asset.size && asset.size > 50 * 1024 * 1024) {
+          alert("Ukuran berkas maksimal 50 MB.");
+          return;
+        }
+        if (onSelectFile) {
+          onSelectFile({
+            uri: asset.uri,
+            name: asset.name,
+            size: asset.size,
+            mimeType: asset.mimeType || "application/octet-stream",
+          });
+        }
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   return (
     <View
       style={{
-        paddingHorizontal: 16,
-        paddingVertical: 12,
+        paddingHorizontal: 14,
+        paddingTop: 8,
+        paddingBottom: 8,
         backgroundColor: t.inputAreaBg,
         borderTopWidth: 1,
         borderTopColor: t.inputAreaBorder,
       }}
     >
+      {/* Image Preview Banner */}
+      {selectedImage && (
+        <View
+          style={{
+            marginBottom: 8,
+            padding: 8,
+            paddingHorizontal: 12,
+            borderRadius: 14,
+            backgroundColor: isDark ? "rgba(40,40,48,0.9)" : "rgba(240,240,246,0.9)",
+            borderWidth: 1,
+            borderColor: isDark ? "#3f3f4e" : "#e2e2ec",
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "space-between",
+            maxWidth: 340,
+          }}
+        >
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 10, flex: 1 }}>
+            <Image
+              source={{ uri: selectedImage.uri }}
+              style={{ width: 42, height: 42, borderRadius: 8 }}
+            />
+            <View style={{ flex: 1 }}>
+              <Text
+                numberOfLines={1}
+                style={{
+                  fontSize: 12,
+                  fontWeight: "600",
+                  color: t.inputColor,
+                }}
+              >
+                {selectedImage.name}
+              </Text>
+              <Text style={{ fontSize: 10, color: isDark ? "#888899" : "#666677" }}>
+                {selectedImage.size ? `${(selectedImage.size / 1024).toFixed(1)} KB` : "Siap dikirim"}
+              </Text>
+            </View>
+          </View>
+          <TouchableOpacity
+            onPress={onRemoveImage}
+            style={{
+              width: 26,
+              height: 26,
+              borderRadius: 6,
+              backgroundColor: isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.06)",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <X size={14} color={isDark ? "#bbb" : "#555"} />
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* File Preview Banner */}
+      {selectedFile && (
+        <View
+          style={{
+            marginBottom: 8,
+            padding: 8,
+            paddingHorizontal: 12,
+            borderRadius: 14,
+            backgroundColor: isDark ? "rgba(40,40,48,0.9)" : "rgba(240,240,246,0.9)",
+            borderWidth: 1,
+            borderColor: isDark ? "#3f3f4e" : "#e2e2ec",
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "space-between",
+            maxWidth: 340,
+          }}
+        >
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 10, flex: 1 }}>
+            <View
+              style={{
+                width: 38,
+                height: 38,
+                borderRadius: 8,
+                backgroundColor: isDark ? "rgba(139,92,246,0.2)" : "rgba(124,58,237,0.1)",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <Paperclip size={18} color={isDark ? "#a78bfa" : "#7c3aed"} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text
+                numberOfLines={1}
+                style={{
+                  fontSize: 12,
+                  fontWeight: "600",
+                  color: t.inputColor,
+                }}
+              >
+                {selectedFile.name}
+              </Text>
+              <Text style={{ fontSize: 10, color: isDark ? "#888899" : "#666677" }}>
+                {formatFileSize(selectedFile.size)} • Siap dikirim
+              </Text>
+            </View>
+          </View>
+          <TouchableOpacity
+            onPress={onRemoveFile}
+            style={{
+              width: 26,
+              height: 26,
+              borderRadius: 6,
+              backgroundColor: isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.06)",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <X size={14} color={isDark ? "#bbb" : "#555"} />
+          </TouchableOpacity>
+        </View>
+      )}
+
       <View
         style={{
           flexDirection: "row",
@@ -48,7 +244,7 @@ export default function InputArea({
           gap: 8,
           borderRadius: 16,
           padding: 8,
-          paddingLeft: 12,
+          paddingLeft: 8,
           backgroundColor: t.inputWrapBg,
           borderWidth: 1,
           borderColor: isRecording ? "#ef4444" : t.inputWrapBorder,
@@ -66,25 +262,20 @@ export default function InputArea({
           <NormalMode
             input={input}
             isSendingAudio={isSendingAudio}
+            hasAttachment={!!selectedImage || !!selectedFile}
+            isUploading={isUploadingImage || isUploadingFile}
+            hasImage={!!selectedImage}
+            hasFile={!!selectedFile}
             isDark={isDark}
             t={t}
             onInputChange={onInputChange}
             onSend={onSend}
             onStartRecording={onStartRecording}
+            onOpenImagePicker={handlePickImage}
+            onOpenFilePicker={handlePickFile}
           />
         )}
       </View>
-
-      <Text
-        style={{
-          fontSize: 10,
-          color: t.creditColor,
-          marginTop: 6,
-          paddingLeft: 4,
-        }}
-      >
-        Deslyy : Mff kalo masih banyak Bug :))))
-      </Text>
     </View>
   );
 }
@@ -177,28 +368,110 @@ function RecordingMode({
 interface NormalModeProps {
   input: string;
   isSendingAudio: boolean;
+  hasAttachment: boolean;
+  isUploading: boolean;
+  hasImage: boolean;
+  hasFile: boolean;
   isDark: boolean;
   t: ChatTheme;
   onInputChange: (text: string) => void;
   onSend: () => void;
   onStartRecording: () => void;
+  onOpenImagePicker: () => void;
+  onOpenFilePicker: () => void;
 }
 
 function NormalMode({
   input,
   isSendingAudio,
+  hasAttachment,
+  isUploading,
+  hasImage,
+  hasFile,
   isDark,
   t,
   onInputChange,
   onSend,
   onStartRecording,
+  onOpenImagePicker,
+  onOpenFilePicker,
 }: NormalModeProps) {
+  const canSend = (input.trim().length > 0 || hasAttachment) && !isUploading;
+
   return (
     <>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 2 }}>
+        <TouchableOpacity
+          onPress={onOpenImagePicker}
+          disabled={isUploading || isSendingAudio}
+          style={{
+            width: 32,
+            height: 32,
+            borderRadius: 8,
+            backgroundColor: hasImage
+              ? isDark
+                ? "rgba(139,92,246,0.25)"
+                : "rgba(124,58,237,0.15)"
+              : "transparent",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <ImageIcon
+            size={16}
+            color={
+              hasImage
+                ? isDark
+                  ? "#a78bfa"
+                  : "#7c3aed"
+                : isDark
+                ? "#8a8a9a"
+                : "#6b7280"
+            }
+          />
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          onPress={onOpenFilePicker}
+          disabled={isUploading || isSendingAudio}
+          style={{
+            width: 32,
+            height: 32,
+            borderRadius: 8,
+            backgroundColor: hasFile
+              ? isDark
+                ? "rgba(139,92,246,0.25)"
+                : "rgba(124,58,237,0.15)"
+              : "transparent",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Paperclip
+            size={16}
+            color={
+              hasFile
+                ? isDark
+                  ? "#a78bfa"
+                  : "#7c3aed"
+                : isDark
+                ? "#8a8a9a"
+                : "#6b7280"
+            }
+          />
+        </TouchableOpacity>
+      </View>
+
       <TextInput
         value={input}
         onChangeText={onInputChange}
-        placeholder="Ketik aja sob..."
+        placeholder={
+          hasImage
+            ? "Tambah keterangan gambar..."
+            : hasFile
+            ? "Tambah keterangan berkas..."
+            : "Ketik aja sob..."
+        }
         placeholderTextColor={t.inputPlaceholder}
         multiline
         style={{
@@ -213,7 +486,7 @@ function NormalMode({
 
       <TouchableOpacity
         onPress={onStartRecording}
-        disabled={isSendingAudio}
+        disabled={isSendingAudio || hasAttachment}
         style={{
           width: 36,
           height: 36,
@@ -223,33 +496,41 @@ function NormalMode({
           borderColor: t.micBtnBorder,
           alignItems: "center",
           justifyContent: "center",
-          opacity: isSendingAudio ? 0.5 : 1,
+          opacity: isSendingAudio || hasAttachment ? 0.5 : 1,
         }}
       >
-        <Mic size={15} color={t.micBtnColor} />
+        {isSendingAudio ? (
+          <ActivityIndicator size="small" color={t.micBtnColor} />
+        ) : (
+          <Mic size={15} color={t.micBtnColor} />
+        )}
       </TouchableOpacity>
 
       <TouchableOpacity
         onPress={onSend}
-        disabled={!input.trim()}
+        disabled={!canSend}
         style={{
           width: 36,
           height: 36,
           borderRadius: 10,
-          backgroundColor: input.trim()
+          backgroundColor: canSend
             ? t.sendBtnActiveBg
             : t.sendBtnInactiveBg,
           alignItems: "center",
           justifyContent: "center",
-          opacity: input.trim() ? 1 : 0.4,
+          opacity: canSend ? 1 : 0.4,
         }}
       >
-        <Send
-          size={14}
-          color={
-            input.trim() ? "#fff" : isDark ? "#4b5563" : "#9ca3af"
-          }
-        />
+        {isUploading ? (
+          <ActivityIndicator size="small" color="#fff" />
+        ) : (
+          <Send
+            size={14}
+            color={
+              canSend ? "#fff" : isDark ? "#4b5563" : "#9ca3af"
+            }
+          />
+        )}
       </TouchableOpacity>
     </>
   );

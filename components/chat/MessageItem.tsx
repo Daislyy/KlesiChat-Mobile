@@ -1,10 +1,12 @@
-import React from "react";
+import React, { useEffect, useRef } from "react";
 import {
   View,
   Text,
   TouchableOpacity,
   TextInput,
   Alert,
+  Image,
+  Animated,
 } from "react-native";
 import { Pencil, Trash2, Check } from "lucide-react-native";
 import type { Message } from "../../types/chat";
@@ -12,6 +14,7 @@ import type { ChatTheme } from "../../lib/chatTheme";
 import { formatTime } from "../../lib/chatTheme";
 import Avatar from "./Avatar";
 import VoiceMessagePlayer from "./VoiceMessagePlayer";
+import FileAttachment from "./FileAttachment";
 
 interface MessageItemProps {
   msg: Message;
@@ -25,6 +28,7 @@ interface MessageItemProps {
   onEditSave: (id: string) => void;
   onEditCancel: () => void;
   onDelete: (id: string) => void;
+  onOpenMedia?: (url: string) => void;
 }
 
 export default function MessageItem({
@@ -39,12 +43,47 @@ export default function MessageItem({
   onEditSave,
   onEditCancel,
   onDelete,
+  onOpenMedia,
 }: MessageItemProps) {
   const isAudio = msg.type === "audio";
+  const hasImage = Boolean(msg.media_url || msg.type === "image");
+  const hasFile = Boolean(msg.file_url || msg.type === "file");
+  const showCaption =
+    Boolean(msg.content) &&
+    msg.content.trim() !== "📷 Gambar" &&
+    msg.content.trim() !== "🎤 Pesan suara" &&
+    msg.content.trim() !== "📁 Berkas" &&
+    msg.content.trim() !== msg.file_name;
+
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const slideAnim = useRef(new Animated.Value(isMe ? 20 : -20)).current;
+  const scaleAnim = useRef(new Animated.Value(0.92)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 200,
+        useNativeDriver: true,
+      }),
+      Animated.spring(slideAnim, {
+        toValue: 0,
+        tension: 90,
+        friction: 8,
+        useNativeDriver: true,
+      }),
+      Animated.spring(scaleAnim, {
+        toValue: 1,
+        tension: 90,
+        friction: 8,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, []);
 
   const handleLongPress = () => {
     if (!isMe) return;
-    const options = isAudio
+    const options = (isAudio || hasImage || hasFile)
       ? [{ text: "Hapus", onPress: () => onDelete(msg.id), style: "destructive" as const }]
       : [
           { text: "Edit", onPress: () => onEditStart(msg.id, msg.content) },
@@ -57,11 +96,16 @@ export default function MessageItem({
   };
 
   return (
-    <View
+    <Animated.View
       style={{
         flexDirection: isMe ? "row-reverse" : "row",
         alignItems: "flex-end",
         gap: 10,
+        opacity: fadeAnim,
+        transform: [
+          { translateX: slideAnim },
+          { scale: scaleAnim },
+        ],
       }}
     >
       {!isMe && (
@@ -75,7 +119,7 @@ export default function MessageItem({
 
       <View
         style={{
-          maxWidth: "70%",
+          maxWidth: "75%",
           alignItems: isMe ? "flex-end" : "flex-start",
         }}
       >
@@ -161,8 +205,8 @@ export default function MessageItem({
             onLongPress={handleLongPress}
             activeOpacity={0.8}
             style={{
-              padding: isAudio ? 10 : 10,
-              paddingHorizontal: isAudio ? 12 : 14,
+              padding: (isAudio || hasImage || hasFile) ? 6 : 10,
+              paddingHorizontal: isAudio ? 12 : hasImage || hasFile ? 6 : 14,
               backgroundColor: isMe ? t.outgoingMsgBg : t.incomingMsgBg,
               borderWidth: isMe ? 0 : 1,
               borderColor: isMe ? "transparent" : t.incomingMsgBorder,
@@ -179,6 +223,60 @@ export default function MessageItem({
                 isMe={isMe}
                 isDark={isDark}
               />
+            ) : hasImage && msg.media_url ? (
+              <View style={{ gap: 6 }}>
+                <TouchableOpacity
+                  activeOpacity={0.9}
+                  onPress={() => onOpenMedia && onOpenMedia(msg.media_url!)}
+                >
+                  <Image
+                    source={{ uri: msg.media_url }}
+                    style={{
+                      width: 240,
+                      height: 180,
+                      borderRadius: 12,
+                    }}
+                    resizeMode="cover"
+                  />
+                </TouchableOpacity>
+                {showCaption && (
+                  <Text
+                    style={{
+                      paddingHorizontal: 6,
+                      paddingBottom: 4,
+                      fontSize: 13,
+                      lineHeight: 21,
+                      color: isMe ? t.outgoingMsgColor : t.incomingMsgColor,
+                    }}
+                  >
+                    {msg.content}
+                  </Text>
+                )}
+              </View>
+            ) : hasFile && msg.file_url ? (
+              <View style={{ gap: 6 }}>
+                <FileAttachment
+                  fileName={msg.file_name || "Berkas"}
+                  fileSize={msg.file_size}
+                  fileType={msg.file_type}
+                  fileUrl={msg.file_url}
+                  isMe={isMe}
+                  isDark={isDark}
+                />
+                {showCaption && (
+                  <Text
+                    style={{
+                      paddingHorizontal: 6,
+                      paddingBottom: 4,
+                      fontSize: 13,
+                      lineHeight: 21,
+                      color: isMe ? t.outgoingMsgColor : t.incomingMsgColor,
+                    }}
+                  >
+                    {msg.content}
+                  </Text>
+                )}
+              </View>
             ) : (
               <Text
                 style={{
@@ -205,6 +303,6 @@ export default function MessageItem({
           {formatTime(msg.created_at)}
         </Text>
       </View>
-    </View>
+    </Animated.View>
   );
 }
